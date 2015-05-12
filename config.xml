@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Root>
+
+    <HttpServer>
+        <ListenPort>10000</ListenPort>
+        <RequestPath>
+            <ProxyPush>/proxy_ping</ProxyPush>
+            <FetchTaskPath>/fetch_task</FetchTaskPath>
+        </RequestPath>
+        <ConnectTimeoutSec>60</ConnectTimeoutSec>
+    </HttpServer>
+
+    <OutsideProxy>
+        <Uri>http://59.108.122.184:9090/</Uri>
+        <CheckIntervalSec>60</CheckIntervalSec>
+        <ProxyErrorRate>0.4</ProxyErrorRate>
+        <ErrorCacheTimeout>36000</ErrorCaceTimeout>
+    </OutsideProxy>
+
+    <InsideProxy>
+        <DeadIntervalSec>60</DeadIntervalSec>
+        <ProxyErrorRate>1.0</ProxyErrorRate>
+        <ErrorCacheTimeout>120</ErrorCaceTimeout>
+    </InsideProxy>
+
+    <HttpClient>
+        <EthName>eth1</EthName>
+        <MaxRequestSize>100000</MaxRequestSize>
+        <MaxResultSize>100000</MaxResultSize>
+        <MaxTimeoutSec>3600</MaxTimeoutSec>
+    </HttpClient>
+
+</Root>
