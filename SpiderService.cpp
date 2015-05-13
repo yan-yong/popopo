@@ -2,24 +2,33 @@
 #include "SpiderService.hpp"
 #include "HttpClient.hpp"
 #include "jsoncpp/include/json/json.h"
+#include "FetchTask.hpp"
+
+typedef boost::shared_ptr<FetchTask> task_ptr_t;
 
 enum ServiceState
 {
-    FETCH_REQUEST,
+    SINGLE_FETCH_REQUEST,
+    BATCH_FETCH_REQUEST,
     SEND_RESULT
 };
 
 struct ServiceRequest
 {
-    request_ptr_t req_;
     conn_ptr_t    conn_;
-    FetchProxy*   proxy_;
-    std::string   result_dest_;
+    task_ptr_t    task_;
     ServiceState  state_;
+    FetchProxy*   proxy_;
+
+    ServiceRequest():
+        state_(SINGLE_FETCH_REQUEST), proxy_(NULL)
+    {
+
+    }
 };
 
 SpiderService::SpiderService():
-    outside_batch_cfg_(NULL), inside_batch_cfg_(NULL), 
+    single_task_cfg_(NULL), batch_task_cfg_(NULL), 
     stopped_(false), result_pid_(0), pool_pid_(0), 
     outside_proxy_size_(0), outside_request_time_(0)
 {
@@ -99,6 +108,37 @@ void SpiderService::handle_norm_request(conn_ptr_t conn)
 void SpiderService::handle_tunnel_request(conn_ptr_t conn)
 {
     http_server_->remove_connection(conn);
+}
+
+void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
+{
+    ServiceRequest* req = new ServiceRequest();
+    req->conn_ = conn;
+    req->task_ = ptask;
+    req->state_= state;
+
+    FetchProxy* proxy = 
+
+    if(state == SINGLE_FETCH_REQUEST)
+    {
+        http_client_.PutRequest(conn->req_->Uri, (void*)req, &conn->req_->headers, 
+            conn->req_->content.c_str(), single_task_cfg_, );
+        return;
+    }
+
+    req_ptr_t conn_req = conn->req_;
+    const char* task_str = conn_req->content_.c_str();
+    Json::Value  task_json(Json::objectValue);
+    Json::Reader reader;
+    if(!reader.parse(task_str, task_json))
+    {
+        LOG_ERROR("fetch task request error: %s\n", task_str);
+        return;
+    }
+    task_ptr_t ptask(new FetchTask());
+    ptask->from_json(task_json);
+
+    http_client_.PutRequest(, , );
 }
 
 void SpiderService::update_ping_proxy(const char* proxy_str)

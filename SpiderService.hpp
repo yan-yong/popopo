@@ -19,8 +19,11 @@ class SpiderService: public boost::enable_shared_from_this<SpiderService>
     FetchProxyMap ping_proxy_map_;
     time_t        outside_request_time_;
 
-    BatchConfig*  outside_batch_cfg_;
-    BatchConfig*  inside_batch_cfg_;
+    // 单个的请求，是由http代理接口过来的请求
+    BatchConfig*  single_task_cfg_;
+    // 批量提交的请求 
+    BatchConfig*  batch_task_cfg_;
+
     bool stopped_;
     pthread_t result_pid_;
     pthread_t pool_pid_;
