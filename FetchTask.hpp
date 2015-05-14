@@ -7,19 +7,21 @@
 
 struct FetchRequest
 {
-    //std::string result_addr_;
     std::string url_;
-    MessageHeaders req_headers_; 
     std::string content_;
+    // 指定下载结点
+    std::string proxy_ip_;
+    MessageHeaders req_headers_; 
  
 public:
-    FetchRequest()
-    {
-    }
-
     void add_http_header(std::string key, std::string val)
     {
         req_headers_.Add(key, val);
+    }
+
+    void set_download_proxy(std::string proxy_ip)
+    {
+        proxy_ip_ = proxy_ip;
     }
 
     Json::Value to_json() const
@@ -36,6 +38,8 @@ public:
         }
         if(req_headers_.Size() > 0)
             val["head"] = heads;
+        if(!proxy_ip_.empty())
+            val["proxy"] = proxy_ip_;
         return val;
     }
 
@@ -52,6 +56,9 @@ public:
         Json::Value content_obj = json_val.get("cont", empty_val);
         if(!content_obj.empty())
             content_ = content_obj.asString();
+        Json::Value proxy_obj = json_val.get("proxy", empty_val);
+        if(!proxy_obj.empty())
+            proxy_ip_ = proxy_obj.asString();
         Json::Value head_obj = json_val.get("head", empty_val);
         if(head_obj.empty())
             return true;
@@ -65,15 +72,19 @@ public:
 /******** option 选项 **********/
 struct TaskOption
 {
-    // 抓取优先级
+    // 抓取优先级 (1-9)
     ResourcePriority prior_;
-    // 要求国外的抓取结点
-    char foreign_:            1;
-    // 要求我们自己部署的结点
-    char ping_proxy_:         1;
-    // 0: 表示解析器版本需要精确为parser_version_
-    // 1: 表示解析器版本为指定的最低版本
-    char fix_parser_version_: 1;
+    // 0: 抓取任务无需翻墙 
+    // 1: 要求国外的抓取结点, 即抓取的url需要翻墙
+    char over_wall_:           1;
+    // 1: 要求只使用我们自己部署的结点
+    char ping_proxy_:          1;
+    // 0: 表示解析器版本为指定的最低版本
+    // 1: 表示解析器版本需要精确为parser_version_
+    char fix_parser_version_:  1;
+    // 0: 墙内站点只能使用国内Proxy
+    // 1: 墙内站点可以使用国外Proxy
+    char inwall_can_use_foreign_ip_:  1;
 }
 
 struct FetchTask

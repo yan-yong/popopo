@@ -110,35 +110,144 @@ void SpiderService::handle_tunnel_request(conn_ptr_t conn)
     http_server_->remove_connection(conn);
 }
 
-void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
+// proxy调度
+bool SpiderService::acquire_proxy(ServiceRequest* service_req, std::string& err_msg_str, 
+    const std::string& proxy_addr = std::string() )
 {
-    ServiceRequest* req = new ServiceRequest();
-    req->conn_ = conn;
-    req->task_ = ptask;
-    req->state_= state;
-
-    FetchProxy* proxy = 
-
-    if(state == SINGLE_FETCH_REQUEST)
+    // 客户端指定proxy IP
+    if(!proxy_addr.empty())
     {
-        http_client_.PutRequest(conn->req_->Uri, (void*)req, &conn->req_->headers, 
-            conn->req_->content.c_str(), single_task_cfg_, );
-        return;
+        size_t sep_idx = proxy_addr.find(":");
+        if(sep_idx != std::string::npos)
+            proxy_addr = proxy_addr.substr(0, sep_idx);
+        FetchProxy* proxy = outside_proxy_map_.acquire_proxy(proxy_addr);
+        if(!proxy)
+            proxy = ping_proxy_map_.acquire_proxy(proxy_addr);
+        if(proxy)
+        {
+            service_req->proxy_ = proxy;
+            return true;
+        }
+        err_msg_str = "cannot acquire fix proxy " + proxy_addr;
+        return false;
     }
 
+    size_t outside_proxy_size = outside_proxy_map_.size();
+    size_t ping_proxy_size    = ping_proxy_map_.size();
+    // 选择一个map
+    FetchProxyMap* proxy_map  = NULL;
+    if(service_req->task_ && service_req->task_->option_.ping_proxy_)
+        proxy_map = &ping_proxy_map_;
+    else
+    {
+        if(outside_proxy_size == 0)
+            proxy_map = &ping_proxy_map_;
+        else if(ping_proxy_size == 0)
+            proxy_map = &outside_proxy_map_;
+        // 两个size都不为0, 取一个最长时间没有访问过的map
+        else
+        {
+            proxy_map = &ping_proxy_map_;
+            if(ping_proxy_map_.min_refer_time() > outside_proxy_map_.min_refer_time())
+                proxy_map = &outside_proxy_map_;
+        }
+    }
+
+    if(proxy_map && proxy_map->size())
+    {
+        // 需要翻墙
+        if(service_req->task_ && service_req->task_->option_.over_wall_)
+            service_req->proxy_ = proxy_map->acquire_foreign_proxy();
+        // 墙内站点只使用国内的IP
+        else if(service_req->task_ && !service_req->task_->option_.inwall_can_use_foreign_ip_)
+            service_req->proxy_ = proxy_map->acquire_internal_proxy();
+        else
+            service_req->proxy_ = proxy_map->acquire_proxy();
+    }
+
+    if(service_req->proxy_ == NULL)
+    {
+        err_msg_str = "acquire_proxy error: ";
+        if(service_req->task_ && service_req->task_->option_.ping_proxy_)
+            err_msg_str += "ping ";
+        err_msg_str += "proxy map ";
+        if(service_req->task_ && service_req->task_->option_.over_wall_)
+            err_msg_str += " foreign list ";
+        err_msg_str += "equal to 0";
+        return false; 
+    }
+
+    return true;
+}
+
+void SpiderService::release_proxy(ServiceRequest* service_req)
+{
+    if(service_req->is_outside_)
+        outside_proxy_map_.release_proxy(service_req->proxy_);
+    else
+        ping_proxy_map_.release_proxy(service_req->proxy_);
+    service_req->proxy_ = NULL;
+}
+
+void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
+{
+    // 通过http代理接口 过来的请求
+    if(state == SINGLE_FETCH_REQUEST)
+    {
+        ServiceRequest* req = new ServiceRequest();
+        req->conn_ = conn;
+        req->state_= state;
+        std::string err_msg;
+        if(!acquire_proxy(req, err_msg))
+        {
+            delete req;
+            conn->write_http_service_unavailable(err_msg);
+            LOG_ERROR("acquire proxy error: %s for %s\n", err_msg.c_str(), conn->ToString().c_str());
+            return;
+        }
+        http_client_.PutRequest(conn->req_->Uri, (void*)req, &conn->req_->headers, 
+            conn->req_->content.c_str(), single_task_cfg_, req->proxy_->AcquireAddrinfo());
+        return;
+    }
+    
+    //////// 通过http fetch_task接口 过来的请求  /////////
     req_ptr_t conn_req = conn->req_;
-    const char* task_str = conn_req->content_.c_str();
+    if(conn_req->content_.empty())
+    {
+        std::string error_cont = "fetch task has no content";
+        conn->write_http_bad_request(error_cont);
+        LOG_ERROR("skip invalid fetch task: %s, %s\n", 
+            error_cont.c_str(), conn->peer_addr().c_str());
+        return;
+    }
+    // json解析
+    const char*  task_str = conn_req->content_.c_str();
     Json::Value  task_json(Json::objectValue);
     Json::Reader reader;
     if(!reader.parse(task_str, task_json))
     {
-        LOG_ERROR("fetch task request error: %s\n", task_str);
+        std::string error_cont = "fetch task content is invalid json";
+        LOG_ERROR("skip invalid fetch task: %s, %s\n", 
+            error_cont.c_str(), conn->peer_addr().c_str());
+        conn->write_http_bad_request(error_cont);
         return;
     }
+    // fetch task反序列化
     task_ptr_t ptask(new FetchTask());
-    ptask->from_json(task_json);
-
-    http_client_.PutRequest(, , );
+    if(!ptask->from_json(task_json))
+    {
+        std::string error_cont = "fetch task deserializate error";
+        LOG_ERROR("skip invalid fetch task: %s, %s\n", 
+            error_cont.c_str(), conn->peer_addr().c_str());
+        conn->write_http_bad_request(error_cont);
+        return;
+    }
+    // 提交抓取任务
+    for(unsigned i = 0; i < )
+    {
+        ServiceRequest* req = new ServiceRequest();
+        http_client_.PutRequest(, , );
+    }
 }
 
 void SpiderService::update_ping_proxy(const char* proxy_str)

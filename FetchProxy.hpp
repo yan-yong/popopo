@@ -1,6 +1,7 @@
 #ifndef __FETCH_PROXY_HPP
 #define __FETCH_PROXY_HPP
 #include "log/log.h"
+#include "proxy/Proxy.hpp"
 #include "utility/stastic_count.h"
 #include "jsoncpp/include/json/json.h"
 #include "linklist/linked_list.hpp"
@@ -11,6 +12,9 @@ class FetchProxy: Proxy
     //response cost time
     StasticCount<double, 10> resp_cost_ms_;
     StasticCount<double, 10> fail_rate_;
+    struct addrinfo * addr_info_;    
+    uint64_t digest_;
+
     time_t arrive_time_;
     time_t update_time_;
     time_t refer_time_; 
@@ -22,12 +26,18 @@ public:
     linked_list_node_t node_;
 
 public:
-    FetchProxy(bool is_outside_proxy = true, time_t cur_time = time(NULL)): 
-        arrive_time_(cur_time), update_time_(cur_time), 
+    FetchProxy(bool is_outside_proxy = true, time_t cur_time = time(NULL)):
+        addr_info_(NULL), digest_(0), arrive_time_(cur_time), update_time_(cur_time), 
         refer_time_(0), refer_cnt_(0), is_error_(0), 
         is_outside_(is_outside_proxy)
     {
 
+    }
+
+    ~FetchProxy()
+    {
+        if(addr_info_)
+            delete addr_info_;
     }
 
     void add_resp_cost(double resp_cost_ms)
@@ -48,10 +58,19 @@ public:
 
     uint64_t get_digest() const
     {
-        uint64_t val = 0;
-        std::string proxy_str = ToString();
-        MurmurHash_x64_64(proxy_str.c_str(), proxy_str.size(), &val);
-        return val; 
+        if(!digest_)
+        {
+            std::string proxy_str = ToString();
+            MurmurHash_x64_64(proxy_str.c_str(), proxy_str.size(), &digest_);
+        }
+        return digest_; 
+    }
+
+    struct addrinfo* AcquireAddrinfo() const
+    {
+        if(!addr_info_)
+            addr_info_ = create_addrinfo(ip_, port_);
+        return addr_info_;
     }
 
     friend class FetchProxyMap;
@@ -227,6 +246,16 @@ public:
         return error_map_.size();
     }
 
+    time_t min_refer_time() const
+    {
+        time_t refer_time = 0;
+        if(!internal_lst_.empty())
+            refer_time = internal_lst_->get_front()->refer_time_;
+        if(!foreign_lst_.empty() && refer_time > foreign_lst_->get_front()->refer_time_)
+            refer_time = foreign_lst_->get_front()->refer_time_;
+        return refer_time;
+    }
+
     FetchProxy* acquire_proxy()
     {
         MutexGuard guard(proxy_lock_);
@@ -238,6 +267,22 @@ public:
         }
         return __acquire_proxy(pop_lst);
     }
+
+    FetchProxy* acquire_proxy(const std::string& ip)
+    {
+        uint64_t digest = 0;
+        MurmurHash_x64_64(ip.c_str(), ip.size(), &digest);
+        proxy_map_t::iterator it = candidate_map_.find(digest);
+        if(it == candidate_map_.end())
+            return NULL;
+        FetchProxy* proxy = it->second;
+        // 将proxy放到最后一个
+        error_map_t::del(*proxy);
+        proxy_list_t* plst = &internal_lst_;
+        if(proxy->is_foreign_)
+            plst = &foreign_lst_;
+        plst->add_back(*proxy);
+    } 
 
     FetchProxy* acquire_internal_proxy()
     {
