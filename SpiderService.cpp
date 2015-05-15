@@ -44,9 +44,11 @@ void SpiderService::initialize(shared_ptr<Config> config)
     outside_proxy_map_.set_proxy_error_cache_time(config_->outside_proxy_error_cache_time_);
 
     // inside proxy
-    ping_proxy_map_.set_ping_dead_interval_sec(config_->inside_proxy_dead_time_);
-    ping_proxy_map_.set_proxy_error_rate(config_->inside_proxy_error_rate_);
-    ping_proxy_map_.set_proxy_error_cache_time(config_->inside_proxy_error_cache_time_);
+    ping_proxy_map_.set_ping_dead_interval_sec(config_->ping_proxy_dead_time_);
+    ping_proxy_map_.set_proxy_error_rate(config_->ping_proxy_error_rate_);
+    ping_proxy_map_.set_proxy_error_cache_time(config_->ping_proxy_error_cache_time_);
+    for(unsigned i = 0; i < config_->ping_nodes_lst_.size(); ++i)
+        ping_proxy_map_.add_proxy(false, config_->ping_nodes_lst_[i].first, config_->ping_nodes_lst_[i].second);
 
     // http client
     http_client_.reset(new HttpClient(config_->max_request_size_, 
@@ -63,7 +65,7 @@ void SpiderService::initialize(shared_ptr<Config> config)
     pthread_create(&pool_pid_, NULL, result_thread, (void*)p_cur);
     pthread_create(&result_pid_, NULL, pool_thread, (void*)p_cur);
     usleep(10000);
-    delete p_cur; 
+    delete p_cur;
 }
 
 void SpiderService::timed_runtine()
@@ -91,23 +93,40 @@ void SpiderService::handle_norm_request(conn_ptr_t conn)
 {
     request_ptr_t req = conn->get_request();
     std::string path = req->get_path();
+    size_t idx = path.find(1, '/');
+    if(idx != std::string::npos)
+        path = path.substr(0, idx)
     // proxy ping
-    if(path.find(config_->proxy_ping_path_) == 0)
+    if(path == config_->proxy_ping_path_)
     {
         update_ping_proxy(req->content.c_str());
         conn->write_http_ok();
         return;
     }
     // fetch request
-    if(path.find(config_->fetch_task_path_) == 0)
+    if(path == config_->fetch_task_path_)
     {
+        recv_fetch_task(conn, BATCH_FETCH_REQUEST);
         return;
     }
+    recv_fetch_task(conn, SINGLE_FETCH_REQUEST);
 }
 
 void SpiderService::handle_tunnel_request(conn_ptr_t conn)
 {
-    http_server_->remove_connection(conn);
+    ServiceRequest* req = new ServiceRequest();
+    req->conn_ = conn;
+    req->state_= state;
+    std::string err_msg;
+    if(!acquire_proxy(req, err_msg))
+    {
+        delete req;
+        conn->write_http_service_unavailable(err_msg);
+        LOG_ERROR("acquire proxy error: %s for tunnel %s\n", err_msg.c_str(), conn->ToString().c_str());
+        return;
+    }
+    delete req;
+    http_server_.tunnel_connect(req->proxy_->ip_, req->proxy_->port_, true);
 }
 
 // proxy调度
@@ -206,7 +225,7 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
             return;
         }
         http_client_.PutRequest(conn->req_->Uri, (void*)req, &conn->req_->headers, 
-            conn->req_->content.c_str(), single_task_cfg_, req->proxy_->AcquireAddrinfo());
+            conn->req_->content.c_str(), single_task_cfg_, req->proxy_->acquire_addrinfo());
         return;
     }
     
@@ -243,11 +262,25 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
         return;
     }
     // 提交抓取任务
-    for(unsigned i = 0; i < )
+    for(unsigned i = 0; i < ptask->req_array_.size(); ++i)
     {
         ServiceRequest* req = new ServiceRequest();
-        http_client_.PutRequest(, , );
+        req->conn_ = conn;
+        req->state_= state;
+        std::string err_msg;
+        if(!acquire_proxy(req, err_msg))
+        {
+            delete req;
+            conn->write_http_service_unavailable(err_msg);
+            LOG_ERROR("acquire proxy error: %s for %s\n", err_msg.c_str(), conn->ToString().c_str());
+            continue;
+        }
+        req->task_ = ptask;
+        http_client_.PutRequest(conn->req_->Uri, (void*)req, &conn->req_->headers, 
+            conn->req_->content.c_str(), batch_task_cfg_, req->proxy_->acquire_addrinfo());
     }
+    // response ok
+    req->conn_->write_http_ok();
 }
 
 void SpiderService::update_ping_proxy(const char* proxy_str)
@@ -305,6 +338,29 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
         result_->resp_->Body.push_back('\0');
         result_->resp_->Body.pop_back();
         update_outside_proxy(&result_->resp_->Body[0]);
+    }
+    ServiceRequest* service_req = (ServiceRequest*)result->contex_;
+    if(service_req->state_ == SINGLE_FETCH_REQUEST)
+    {
+        boost::shared_ptr<reply> resp(new reply());
+        resp.status  = reply::ok;
+        resp.headers = result.Headers;
+        resp.content = &result.Body[0];
+        resp.status = result.resp_->StatusCode;
+        service_req->conn_->write_http_reply(resp);
+        delete service_req;
+        result->contex_ = NULL;
+        return;
+    }
+    
+    if(service_req->state_ == BATCH_FETCH_REQUEST)
+    {
+
+    }
+
+    if(service_req->state_ == SEND_RESULT)
+    {
+
     }
 }
 

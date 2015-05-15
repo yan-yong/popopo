@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Root>
-
     <HttpServer>
         <ListenPort>10000</ListenPort>
         <RequestPath>
@@ -14,14 +13,15 @@
         <Uri>http://59.108.122.184:9090/</Uri>
         <CheckIntervalSec>60</CheckIntervalSec>
         <ProxyErrorRate>0.4</ProxyErrorRate>
-        <ErrorCacheTimeout>36000</ErrorCaceTimeout>
+        <ErrorCacheTimeout>36000</ErrorCacheTimeout>
     </OutsideProxy>
 
-    <InsideProxy>
+    <PingProxy>
         <DeadIntervalSec>60</DeadIntervalSec>
         <ProxyErrorRate>1.0</ProxyErrorRate>
-        <ErrorCacheTimeout>120</ErrorCaceTimeout>
-    </InsideProxy>
+        <ErrorCacheTimeout>120</ErrorCacheTimeout>
+        <Nodes>127.0.0.1:11000</Nodes>
+    </PingProxy>
 
     <HttpClient>
         <EthName>eth1</EthName>

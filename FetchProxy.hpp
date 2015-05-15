@@ -66,7 +66,7 @@ public:
         return digest_; 
     }
 
-    struct addrinfo* AcquireAddrinfo() const
+    struct addrinfo* acquire_addrinfo() const
     {
         if(!addr_info_)
             addr_info_ = create_addrinfo(ip_, port_);
@@ -136,7 +136,7 @@ class FetchProxyMap
             proxy->is_error_ = 0;
             error_map_.erase(digest);
         }
-        proxy->update_time_ = time(NULL);
+        //proxy->update_time_ = time(NULL);
         // 加入候选proxy中
         candidate_map_[digest] = proxy;
         proxy_list_t* plst = &internal_lst_;
@@ -284,6 +284,14 @@ public:
         plst->add_back(*proxy);
     } 
 
+    void add_proxy(bool is_outside_proxy, const std::string& ip, uint16_t port)
+    {
+        MutexGuard guard(proxy_lock_);
+        FetchProxy* proxy = new FetchProxy(is_outside_proxy);
+        proxy->SetAddress(ip, port);
+        __move_to_candidate(proxy, false);
+    }
+
     FetchProxy* acquire_internal_proxy()
     {
         MutexGuard guard(proxy_lock_);
@@ -392,6 +400,8 @@ public:
             it = err_map_.find(digest);
             if(it != err_map_.end())
             {
+                // 更新时间
+                it->second->update_time_ = cur_time;
                 __move_to_candidate(it->second);
                 delete proxy;
                 continue;
