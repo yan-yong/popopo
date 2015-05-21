@@ -8,9 +8,9 @@
 struct FetchRequest
 {
     std::string url_;
-    std::string content_;
-    // 指定下载结点
-    std::string proxy_ip_;
+    std::vector<char> content_;
+    // 指定下载结点, 格式为ip:port
+    std::string proxy_addr_;
     MessageHeaders req_headers_; 
  
 public:
@@ -19,16 +19,16 @@ public:
         req_headers_.Add(key, val);
     }
 
-    void set_download_proxy(std::string proxy_ip)
+    void set_download_proxy(std::string proxy_addr)
     {
-        proxy_ip_ = proxy_ip;
+        proxy_addr_ = proxy_addr;
     }
 
     Json::Value to_json() const
     {
         Json::Value val;
         val["url"]  = url_;
-        val["cont"] = content_;
+        val["cont"] = std::string(content_.begin(), content_.end());
         Json::Value heads(Json::arrayValue);
         for(unsigned i = 0; i < req_headers_.Size(); ++i)
         {
@@ -38,8 +38,8 @@ public:
         }
         if(req_headers_.Size() > 0)
             val["head"] = heads;
-        if(!proxy_ip_.empty())
-            val["proxy"] = proxy_ip_;
+        if(!proxy_addr_.empty())
+            val["proxy"] = proxy_addr_;
         return val;
     }
 
@@ -55,10 +55,13 @@ public:
         url_ = url_obj.asString();
         Json::Value content_obj = json_val.get("cont", empty_val);
         if(!content_obj.empty())
-            content_ = content_obj.asString();
+        {
+            std::string content_str = content_obj.asString();
+            content_.assign(content_str.begin(), content_str.end());
+        }
         Json::Value proxy_obj = json_val.get("proxy", empty_val);
         if(!proxy_obj.empty())
-            proxy_ip_ = proxy_obj.asString();
+            proxy_addr_ = proxy_obj.asString();
         Json::Value head_obj = json_val.get("head", empty_val);
         if(head_obj.empty())
             return true;
@@ -93,7 +96,7 @@ struct FetchTask
     // 请求的版本号
     double ver_;
     // 结果response地址
-    struct sockaddr* addr_;
+    struct addrinfo* ai_;
     // 抓取请求列表
     std::vector<FetchRequest> req_array_;
     // 解析器类型
@@ -107,25 +110,47 @@ struct FetchTask
         uint64_t   op_val_;   
     };
 
-    FetchTask(): ver_(REQUEST_VERSION), addr_(NULL), parser_version_(0), op_val_(0) 
+    FetchTask(): ver_(REQUEST_VERSION), ai_(NULL), parser_version_(0), op_val_(0) 
     {
 
     }
 
     ~FetchTask()
     {
-        if(addr_)
+        if(ai_)
         {
-            free(addr_);
-            addr_ = NULL;
+            freeaddrinfo(ai_);
+            ai_ = NULL;
         }
     }
 
+    //FIXME: 可以设置多个ip和端口
     void set_response_address(const char* ip, uint16_t port)
     {
-        if(addr_)
-            free(addr_)
-        addr_ = get_sockaddr_in(ip, port);
+        if(ai_)
+            freeaddrinfo(ai_)
+        ai_ = create_addrinfo(ip, port);
+    }
+
+    std::string get_response_address()
+    {
+        // 当response地址有多个时，使用轮询的方式进行
+        struct addrinfo* head_ai = ai_;
+        struct addrinfo* tail_ai = ai_;
+        while(tail_ai->ai_next)
+            tail_ai = tail_ai->ai_next;
+        if(tail_ai != ai_)
+        {
+            ai_ = ai_->ai_next;
+            tail_ai->ai_next = head_ai;
+            head_ai->ai_next = NULL;
+        }
+        char ip_str[100];
+        uint16_t port = 0;
+        get_addr_string(head_ai->ai_addr, ip_str, 100, port);
+        char buf[100];
+        snprintf(buf, 100, "%s:%hu", ip_str, port);
+        return buf;
     }
 
     void add_request(const FetchRequest& req)
@@ -143,7 +168,7 @@ struct FetchTask
         // response address
         char ip_str[20];
         uint16_t port = 0;
-        if(!get_addr_string(addr_, ip_str, 20, port))
+        if(!get_addr_string(ai_->ai_addr, ip_str, 20, port))
             return val;
         char addr_str[100];
         snprintf(addr_str, 100, "%s:%hu", ip_str, port);
@@ -191,9 +216,9 @@ struct FetchTask
         std::string ip_str   = addr_str.substr(0, sep_idx);
         std::string port_str = addr_str.substr(sep_idx + 1);
         uint16_t port = atoi(port_str.c_str());
-        if(addr_)
-            free(addr_)
-        addr_ = get_sockaddr_in(ip_str.c_str(), port);
+        if(ai_)
+            freeaddrinfo(ai_)
+        ai_ = create_addrinfo(ip_str.c_str(), port);
 
         // task option
         Json::Value op_obj = val.get("op", empty_val);
@@ -203,11 +228,17 @@ struct FetchTask
         // parser info
         Json::Value parser_type_obj = val.get("pt", empty_val);
         if(!parser_type_obj.empty())
+        {
             parser_type_    = parser_type_obj.asString();
+            option_.ping_proxy_ = 1;
+        }
         Json::Value parser_version_obj = val.get("pv", empty_val);
         if(!parser_version_obj.empty())
+        {
             parser_version_ = atof(parser_version_obj.asCString());
-        Json::Value parser_min_version = val.get()
+            if(parser_type_.empty())
+                return false;
+        }
 
         // fetch request
         Json::Value req_obj  = val.get("req", empty_val);

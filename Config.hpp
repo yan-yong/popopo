@@ -34,6 +34,8 @@ struct Config
     size_t      max_request_size_;
     size_t      max_result_size_;
 
+    uint32_t    send_result_retry_times_;
+    uint32_t    fetch_request_retry_times_;
 
 public:
     Config(const char* config_file)
@@ -45,6 +47,9 @@ public:
     {
         boost::property_tree::ptree pt; 
         read_xml(config_file_, pt);
+
+        send_result_retry_times_   = pt.get<uint32_t>("Root.SendResultRetryTimes");
+        fetch_request_retry_times_ = pt.get<uint32_t>("Root.FetchRequestRetryTimes");
 
         listen_port_ = pt.get<std::string>("Root.HttpServer.ListenPort");
         conn_timeout_sec_ = pt.get<time_t>("Root.HttpServer.ConnectTimeoutSec");

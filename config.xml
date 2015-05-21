@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Root>
+    <SendResultRetryTimes>3</SendResultRetryTimes>
+    <FetchRequestRetryTimes>10</FetchRequestRetryTimes>
+
     <HttpServer>
         <ListenPort>10000</ListenPort>
         <RequestPath>
