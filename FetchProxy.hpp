@@ -7,10 +7,10 @@
 #include "jsoncpp/include/json/json.h"
 #include "linklist/linked_list.hpp"
 
-typedef const std::map<std::string, double> parser_ability_t;
+typedef std::map<std::string, double> parser_ability_t;
 
 class FetchProxyMap;
-class FetchProxy: Proxy
+class FetchProxy: public Proxy
 {
     //response cost time
     StasticCount<double, 10> resp_cost_ms_;
@@ -31,7 +31,7 @@ public:
 
 public:
     FetchProxy(bool is_outside_proxy = true, time_t cur_time = time(NULL)):
-        addr_info_(NULL), parser_version_(0), digest_(0), 
+        addr_info_(NULL), digest_(0), 
         arrive_time_(cur_time), update_time_(cur_time), 
         refer_time_(0), refer_cnt_(0), is_error_(0), 
         is_outside_(is_outside_proxy)
@@ -43,6 +43,11 @@ public:
     {
         if(addr_info_)
             delete addr_info_;
+    }
+
+    bool is_outside_proxy() const
+    {
+        return is_outside_;
     }
 
     void add_parser_ability(const std::string& parser_type, double parser_version)
@@ -81,7 +86,7 @@ public:
         ++err_num_; 
     }
 
-    uint64_t get_digest() const
+    uint64_t get_digest()
     {
         if(!digest_)
         {
@@ -91,7 +96,7 @@ public:
         return digest_; 
     }
 
-    struct addrinfo* acquire_addrinfo() const
+    struct addrinfo* acquire_addrinfo()
     {
         if(!addr_info_)
             addr_info_ = create_addrinfo(ip_, port_);
@@ -122,24 +127,20 @@ public:
             if(members.empty())
                 continue;
             std::string parser_type = members[0];
-            parser_ability_[parser_type] = item[parser_type];
+            parser_ability_[parser_type] = atof(item[parser_type].asString().c_str());
         } 
     }
 
     Json::Value ToJson()
     {
         Json::Value val = Proxy::ToJson();
-        if(parser_ability_.empty())
-            return;
-        Json::Value parser_ability_json(Json::arrayValue);
+        //if(parser_ability_.empty())
+        //    return;
+        Json::Value parser_ability_json(Json::objectValue);
         for(parser_ability_t::iterator it = parser_ability_.begin(); it != parser_ability_.end();
             ++it)
         {
-            Json::Value parser_item(Json::objectValue);
-            char buf[10];
-            snprintf(buf, 10, it->second);
-            parser_item[it->first] = buf; 
-            parser_ability_json.append(parser_item);
+            parser_ability_json[it->first] = it->second;
         }
         val["pa"] = parser_ability_json;
         return val;
@@ -151,18 +152,18 @@ public:
 class FetchProxyMap
 {
     typedef boost::unordered_map<uint64_t, FetchProxy*> proxy_map_t;
-    typedef linked_list<FetchProxy, &FetchProxy::node_> proxy_list_t;
+    typedef linked_list_t<FetchProxy, &FetchProxy::node_> proxy_list_t;
     typedef linked_list_map<time_t, FetchProxy, &FetchProxy::node_> error_map_t;
     static const double DEFAULT_ERROR_MIN_FAIL_RATE = 0.4; 
     static const time_t DEFAULT_ERROR_CACHE_TIME    = 36000; // 10 hours
     static const time_t DEFAULT_PING_INTERVAL_SEC   = 60;    // 1 minutes
 
-    proxy_map_t  candidate_map_;
-    proxy_list_t internal_lst_;
-    proxy_list_t foreign_lst_;
+    proxy_map_t  candidate_map_; // 可用的代理的哈希映射
+    proxy_list_t internal_lst_;  // 国内代理队列
+    proxy_list_t foreign_lst_;   // 国外代理队列
 
-    proxy_map_t  error_map_;
-    error_map_t  error_lst_;
+    proxy_map_t  error_map_;    // 用于保存失败的代理的哈希映射
+    error_map_t  error_lst_;    // 用于保存失败的代理的超时缓存队列
     Mutex        proxy_lock_;
 
     double error_min_fail_rate_;
@@ -172,21 +173,21 @@ class FetchProxyMap
     FetchProxy* __acquire_proxy(proxy_list_t& pop_lst, const std::string& parser_type = std::string(), 
         double parser_version = 0, bool fix_parser_version = false)
     {
-        FetchProxy* ret  = pop_lst->get_front();
+        FetchProxy* ret  = pop_lst.get_front();
         // 根据解析器的类型来选择
         while(ret)
         {
             if(ret->enable_parser(parser_type, parser_version, fix_parser_version))
-                break
-            ret = pop_lst->next(*ret);
+                break;
+            ret = pop_lst.next(*ret);
             break;
         }
         if(ret)
         {
             ret->refer_time_ = time(NULL);
             ++ret->refer_cnt_;
-            pop_lst->del(*ret);
-            pop_lst->add_back(*ret);
+            pop_lst.del(*ret);
+            pop_lst.add_back(*ret);
         }
         return ret;
     }
@@ -209,6 +210,7 @@ class FetchProxyMap
         LOG_INFO("%s proxy %s move to error\n", proxy_flag.c_str(), proxy->ToString().c_str());
     }
 
+    // 把一个原来不在candidate队列中的proxy, 移入candidate之中
     void __move_to_candidate(FetchProxy* proxy, bool move_to_back = true)
     {
         uint64_t digest  = proxy->get_digest();
@@ -216,6 +218,7 @@ class FetchProxyMap
         {
             proxy->is_error_ = 0;
             error_map_.erase(digest);
+            error_lst_.del(*proxy);
         }
         //proxy->update_time_ = time(NULL);
         // 加入候选proxy中
@@ -223,7 +226,6 @@ class FetchProxyMap
         proxy_list_t* plst = &internal_lst_;
         if(proxy->is_foreign_)
             plst = &foreign_lst_;
-        error_map_t::del(*proxy);
         if(!move_to_back)
             plst->add_front(*proxy);
         else
@@ -336,9 +338,9 @@ public:
     {
         time_t refer_time = 0;
         if(!internal_lst_.empty())
-            refer_time = internal_lst_->get_front()->refer_time_;
-        if(!foreign_lst_.empty() && refer_time > foreign_lst_->get_front()->refer_time_)
-            refer_time = foreign_lst_->get_front()->refer_time_;
+            refer_time = internal_lst_.get_front()->refer_time_;
+        if(!foreign_lst_.empty() && refer_time > foreign_lst_.get_front()->refer_time_)
+            refer_time = foreign_lst_.get_front()->refer_time_;
         return refer_time;
     }
 
@@ -355,14 +357,14 @@ public:
         return true;
     }
 
-    FetchProxy* acquire_proxy(const std::string& parser_type = std::string(), 
-        double parser_version = 0, bool fix_parser_version = false)
+    FetchProxy* acquire_proxy(const std::string& parser_type, 
+        double parser_version, bool fix_parser_version = false)
     {
         MutexGuard guard(proxy_lock_);
         proxy_list_t pop_lst   = internal_lst_;
         proxy_list_t other_lst = foreign_lst_;
         if(!internal_lst_.empty() && !foreign_lst_.empty()
-            && internal_lst_->get_front()->refer_time_ > foreign_lst_->get_front()->refer_time_)
+            && internal_lst_.get_front()->refer_time_ > foreign_lst_.get_front()->refer_time_)
         {
             pop_lst   = foreign_lst_;
             other_lst = internal_lst_;
@@ -386,11 +388,12 @@ public:
             return NULL;
         FetchProxy* proxy = it->second;
         // 将proxy放到最后一个
-        error_map_t::del(*proxy);
+        proxy_list_t::del(*proxy);
         proxy_list_t* plst = &internal_lst_;
         if(proxy->is_foreign_)
             plst = &foreign_lst_;
         plst->add_back(*proxy);
+        return proxy;
     } 
 
     FetchProxy* acquire_internal_proxy(const std::string& parser_type = std::string(), 
@@ -411,7 +414,7 @@ public:
     {
         MutexGuard guard(proxy_lock_);
         --proxy->refer_cnt_;
-        if(proxy->fail_rate_ >= DEFAULT_ERROR_MIN_FAIL_RATE && !proxy->is_error_)
+        if(proxy->fail_rate_.Average() >= DEFAULT_ERROR_MIN_FAIL_RATE && !proxy->is_error_)
             __move_to_error(proxy);
     }
 
@@ -419,8 +422,8 @@ public:
     {
         MutexGuard guard(proxy_lock_);
         time_t cur_time = time(NULL);
-        Proxy* first_internal_proxy = internal_lst_.get_front();
-        Proxy* first_foreign_proxy  = foreign_lst_.get_front();
+        FetchProxy* first_internal_proxy = internal_lst_.get_front();
+        FetchProxy* first_foreign_proxy  = foreign_lst_.get_front();
         for(unsigned i = 0; i < proxy_json_array.size(); ++i)
         {
             Json::Value item  = proxy_json_array[i];
@@ -447,16 +450,16 @@ public:
         //检查没有更新的proxy, 并将其移入错误列表之中
         while(first_internal_proxy)
         {
-            FetchProxy* next_proxy = internal_lst_.next(first_internal_proxy);
+            FetchProxy* next_proxy = internal_lst_.next(*first_internal_proxy);
             if(first_internal_proxy->update_time_ != cur_time)
-                __move_to_error(proxy);
+                __move_to_error(next_proxy);
             first_internal_proxy = next_proxy;
         }
         while(first_foreign_proxy)
         {
-            FetchProxy* next_proxy = foreign_lst_.next(first_foreign_proxy);
+            FetchProxy* next_proxy = foreign_lst_.next(*first_foreign_proxy);
             if(first_foreign_proxy->update_time_ != cur_time)
-                __move_to_error(proxy);
+                __move_to_error(next_proxy);
             first_foreign_proxy = next_proxy;
         }
     }
@@ -491,8 +494,8 @@ public:
                 delete proxy;
                 continue;
             }
-            it = err_map_.find(digest);
-            if(it != err_map_.end())
+            it = error_map_.find(digest);
+            if(it != error_map_.end())
             {
                 // 更新时间
                 it->second->copy_from(*proxy);

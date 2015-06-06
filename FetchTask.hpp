@@ -43,7 +43,7 @@ public:
         return val;
     }
 
-    bool from_json(const Json::Value & json_val) const
+    bool from_json(const Json::Value & json_val)
     {
         Json::Value empty_val;
         Json::Value url_obj = json_val.get("url", empty_val);
@@ -67,7 +67,7 @@ public:
             return true;
         Json::Value::Members members = head_obj.getMemberNames();
         for (Json::Value::Members::iterator it = members.begin(); it != members.end(); ++it)
-            req_headers_.Add(*it, head_obj[*it]);
+            req_headers_.Add(*it, head_obj[*it].asString());
         return true;
     }
 };
@@ -88,7 +88,7 @@ struct TaskOption
     // 0: 墙内站点只能使用国内Proxy
     // 1: 墙内站点可以使用国外Proxy
     char inwall_can_use_foreign_ip_:  1;
-}
+};
 
 struct FetchTask
 {
@@ -128,7 +128,7 @@ struct FetchTask
     void set_response_address(const char* ip, uint16_t port)
     {
         if(ai_)
-            freeaddrinfo(ai_)
+            freeaddrinfo(ai_);
         ai_ = create_addrinfo(ip, port);
     }
 
@@ -176,7 +176,7 @@ struct FetchTask
 
         // option
         char option_buf[10];
-        snprintf(option_buf, "0x%lx", op_val_);
+        snprintf(option_buf, 10, "0x%lx", op_val_);
         val["op"] = option_buf;
 
         // parser info
@@ -198,13 +198,13 @@ struct FetchTask
         return val;
     }
     
-    bool from_json(const Json::Value& val) const
+    bool from_json(const Json::Value& val)
     {
         Json::Value empty_val;
         // version
         Json::Value ver_obj = val.get("ver", empty_val);
         if(!ver_obj)
-            ver_ = ver_obj.asString();
+            ver_ = atof(ver_obj.asString().c_str());
         // response address
         Json::Value addr_obj = val.get("addr", empty_val);
         if(addr_obj.empty())
@@ -217,7 +217,7 @@ struct FetchTask
         std::string port_str = addr_str.substr(sep_idx + 1);
         uint16_t port = atoi(port_str.c_str());
         if(ai_)
-            freeaddrinfo(ai_)
+            freeaddrinfo(ai_);
         ai_ = create_addrinfo(ip_str.c_str(), port);
 
         // task option
