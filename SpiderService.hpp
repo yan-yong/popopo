@@ -10,9 +10,9 @@
 #include "lock/lock.hpp"
 #include "FetchProxy.hpp"
 #include "async_httpserver/connection.hpp"
-#include "FetchTask.hpp"
+#include "SpiderFetchTask.hpp"
 
-typedef boost::shared_ptr<FetchTask> task_ptr_t;
+typedef boost::shared_ptr<SpiderFetchTask> task_ptr_t;
 
 enum ServiceState
 {

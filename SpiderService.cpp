@@ -131,7 +131,7 @@ bool SpiderService::acquire_proxy(ServiceRequest* service_req, std::string& err_
         parser_type = ptask->parser_type_;
         parser_version = ptask->parser_version_;
         fix_parser_version = ptask->option_.fix_parser_version_;
-        FetchRequest & fetch_req = ptask->req_array_[service_req->req_idx_];
+        SpiderFetchRequest & fetch_req = ptask->req_array_[service_req->req_idx_];
         proxy_addr = fetch_req.proxy_addr_;
     }
 
@@ -262,7 +262,7 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
         return;
     }
     // fetch task反序列化
-    task_ptr_t ptask(new FetchTask());
+    task_ptr_t ptask(new SpiderFetchTask());
     if(!ptask->from_json(task_json) || ptask->req_array_.size() == 0)
     {
         std::string error_cont = "fetch task deserializate error";
@@ -275,7 +275,7 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
     // 提交抓取任务
     for(unsigned i = 0; i < ptask->req_array_.size(); ++i)
     {
-        FetchRequest& fetch_req = ptask->req_array_[i];
+        SpiderFetchRequest& fetch_req = ptask->req_array_[i];
         ServiceRequest* service_req = new ServiceRequest();
         service_req->conn_ = conn;
         service_req->state_= state;
@@ -373,7 +373,7 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
         }
         case BATCH_FETCH_REQUEST:
         {
-            FetchRequest& fetch_request = service_req->task_->req_array_[service_req->req_idx_];
+            SpiderFetchRequest& fetch_request = service_req->task_->req_array_[service_req->req_idx_];
             service_req->state_ = SEND_RESULT;
             ++service_req->send_result_retry_count_;
             fetch_request.req_headers_ = result->resp_->Headers;

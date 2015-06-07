@@ -53,8 +53,8 @@ public:
 
         listen_port_ = pt.get<std::string>("Root.HttpServer.ListenPort");
         conn_timeout_sec_ = pt.get<time_t>("Root.HttpServer.ConnectTimeoutSec");
-        proxy_ping_path_ = pt.get<std::string>("Root.RequestPath.ProxyPing"); 
-        fetch_task_path_ = pt.get<std::string>("Root.RequestPath.FetchTask");
+        proxy_ping_path_ = pt.get<std::string>("Root.HttpServer.RequestPath.ProxyPush"); 
+        fetch_task_path_ = pt.get<std::string>("Root.HttpServer.RequestPath.FetchTask");
 
         outside_proxy_obtain_uri_ = pt.get<std::string>("Root.OutsideProxy.Uri");
         outside_proxy_check_time_ = pt.get<time_t>("Root.OutsideProxy.CheckIntervalSec");

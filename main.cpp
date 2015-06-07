@@ -5,6 +5,7 @@ boost::shared_ptr<SpiderService> g_spider;
 
 static void sig_quit_handler(int sig)
 {
+    LOG_INFO("Recv quit signal ... \n");
     g_spider->close();
 }
 
