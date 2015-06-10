@@ -170,24 +170,24 @@ class FetchProxyMap
     time_t error_cache_time_;
     time_t ping_dead_interval_sec_;
 
-    FetchProxy* __acquire_proxy(proxy_list_t& pop_lst, const std::string& parser_type = std::string(), 
+    FetchProxy* __acquire_proxy(proxy_list_t* pop_lst, const std::string& parser_type = std::string(), 
         double parser_version = 0, bool fix_parser_version = false)
     {
-        FetchProxy* ret  = pop_lst.get_front();
+        FetchProxy* ret  = pop_lst->get_front();
         // 根据解析器的类型来选择
         while(ret)
         {
             if(ret->enable_parser(parser_type, parser_version, fix_parser_version))
                 break;
-            ret = pop_lst.next(*ret);
+            ret = pop_lst->next(*ret);
             break;
         }
         if(ret)
         {
             ret->refer_time_ = time(NULL);
             ++ret->refer_cnt_;
-            pop_lst.del(*ret);
-            pop_lst.add_back(*ret);
+            pop_lst->del(*ret);
+            pop_lst->add_back(*ret);
         }
         return ret;
     }
@@ -239,7 +239,7 @@ class FetchProxyMap
         time_t error_time;
         FetchProxy* proxy;
         time_t cur_time = time(NULL);
-        while(true)
+        while(!error_lst_.empty())
         {
             error_lst_.get_front(error_time, proxy);
             if(!proxy)
@@ -258,22 +258,22 @@ class FetchProxyMap
         }
     }
 
-    void __check_dead_proxy_ping(proxy_list_t lst)
+    void __check_dead_proxy_ping(proxy_list_t* lst)
     {
-        if(lst.empty())
+        if(lst->empty())
             return;
         time_t cur_time = time(NULL);
-        FetchProxy* proxy = lst.get_front();
+        FetchProxy* proxy = lst->get_front();
         while(proxy)
         {
             if(proxy->update_time_ + ping_dead_interval_sec_ > cur_time)
             {
-                proxy = lst.next(*proxy);
+                proxy = lst->next(*proxy);
                 continue;
             }
             if(proxy->refer_cnt_ == 0 && error_cache_time_ == 0)
             {
-                lst.del(*proxy);
+                lst->del(*proxy);
                 LOG_INFO("delete dead ping proxy %s\n", proxy->ToString().c_str());
                 delete proxy;
                 continue;
@@ -361,20 +361,20 @@ public:
         double parser_version, bool fix_parser_version = false)
     {
         MutexGuard guard(proxy_lock_);
-        proxy_list_t pop_lst   = internal_lst_;
-        proxy_list_t other_lst = foreign_lst_;
+        proxy_list_t* pop_lst   = &internal_lst_;
+        proxy_list_t* other_lst = &foreign_lst_;
         if(!internal_lst_.empty() && !foreign_lst_.empty()
             && internal_lst_.get_front()->refer_time_ > foreign_lst_.get_front()->refer_time_)
         {
-            pop_lst   = foreign_lst_;
-            other_lst = internal_lst_;
+            pop_lst   = &foreign_lst_;
+            other_lst = &internal_lst_;
         }
-        if(pop_lst.empty())
+        if(pop_lst->empty())
             return NULL;
         FetchProxy* ret = __acquire_proxy(pop_lst, parser_type, parser_version, fix_parser_version);
         if(ret)
             return ret;
-        if(other_lst.empty())
+        if(other_lst->empty())
             return NULL;
         return __acquire_proxy(other_lst, parser_type, parser_version, fix_parser_version);
     }
@@ -400,14 +400,14 @@ public:
         double parser_version = 0, bool fix_parser_version = false)
     {
         MutexGuard guard(proxy_lock_);
-        return __acquire_proxy(internal_lst_, parser_type, parser_version, fix_parser_version);
+        return __acquire_proxy(&internal_lst_, parser_type, parser_version, fix_parser_version);
     }
 
     FetchProxy* acquire_foreign_proxy(const std::string& parser_type = std::string(), 
         double parser_version = 0, bool fix_parser_version = false)
     {
         MutexGuard guard(proxy_lock_);
-        return __acquire_proxy(foreign_lst_, parser_type, parser_version, fix_parser_version);
+        return __acquire_proxy(&foreign_lst_, parser_type, parser_version, fix_parser_version);
     }
 
     void release_proxy(FetchProxy* proxy)
@@ -472,8 +472,8 @@ public:
     // 检查指定时间内没有ping的proxy, 并将其删除或移入错误列表中
     void remove_dead_ping_proxy()
     {
-        __check_dead_proxy_ping(internal_lst_);
-        __check_dead_proxy_ping(foreign_lst_);
+        __check_dead_proxy_ping(&internal_lst_);
+        __check_dead_proxy_ping(&foreign_lst_);
         __check_error_proxy_delete();
     } 
 

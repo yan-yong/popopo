@@ -33,6 +33,9 @@ void SpiderService::initialize(boost::shared_ptr<Config> config)
     for(unsigned i = 0; i < config_->ping_nodes_lst_.size(); ++i)
         ping_proxy_map_.add_proxy(false, config_->ping_nodes_lst_[i].first, config_->ping_nodes_lst_[i].second);
 
+    // dns resolver
+    dns_resolver_.reset(new DNSResolver());
+
     // http client
     http_client_.reset(new HttpClient(config_->max_request_size_, 
         config_->max_result_size_, config_->client_bind_eth_.c_str()));
@@ -44,8 +47,8 @@ void SpiderService::initialize(boost::shared_ptr<Config> config)
     http_server_->add_runtine(5, boost::bind(&SpiderService::timed_runtine, shared_from_this()));
 
     // initialize work thread
-    pthread_create(&pool_pid_, NULL, result_thread, (void*)this);
-    pthread_create(&result_pid_, NULL, pool_thread, (void*)this);
+    pthread_create(&result_pid_, NULL, result_thread, (void*)this);
+    pthread_create(&pool_pid_, NULL, pool_thread, (void*)this);
     //usleep(10000);
 }
 

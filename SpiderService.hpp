@@ -42,9 +42,10 @@ struct ServiceRequest
 
 class SpiderService: public boost::enable_shared_from_this<SpiderService>
 {
-    boost::shared_ptr<Config> config_;
-    boost::shared_ptr<HttpServer> http_server_;
-    boost::shared_ptr<HttpClient> http_client_;
+    boost::shared_ptr<Config>      config_;
+    boost::shared_ptr<HttpServer>  http_server_;
+    boost::shared_ptr<HttpClient>  http_client_;
+    boost::shared_ptr<DNSResolver> dns_resolver_;
 
     FetchProxyMap outside_proxy_map_;
     FetchProxyMap ping_proxy_map_;
