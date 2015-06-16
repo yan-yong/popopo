@@ -45,6 +45,8 @@ void SpiderService::initialize(boost::shared_ptr<Config> config)
     http_server_.reset(new HttpServer());
     http_server_->initialize("0.0.0.0", config_->listen_port_, config_->conn_timeout_sec_);
     http_server_->add_runtine(5, boost::bind(&SpiderService::timed_runtine, shared_from_this()));
+    http_server_->set_norm_http_handler(boost::bind(&SpiderService::handle_norm_request, this, _1));
+    http_server_->set_tunnel_http_handler(boost::bind(&SpiderService::handle_tunnel_request, this, _1));
 
     // initialize work thread
     pthread_create(&result_pid_, NULL, result_thread, (void*)this);
@@ -81,6 +83,7 @@ void SpiderService::wait()
 
 void SpiderService::handle_norm_request(conn_ptr_t conn)
 {
+    LOG_DEBUG("connection %s is coming\n", conn->peer_addr().c_str());
     request_ptr_t req = conn->get_request();
     std::string path = req->get_path();
     size_t idx = path.find(1, '/');
@@ -220,9 +223,11 @@ void SpiderService::release_proxy(ServiceRequest* service_req)
 
 void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
 {
+    request_ptr_t conn_req = conn->get_request();
     // 通过http代理接口 过来的请求
     if(state == SINGLE_FETCH_REQUEST)
     {
+        LOG_INFO("RECV SINGLE_FETCH_REQUEST %s from %s\n", conn_req->uri.c_str(), conn->peer_addr().c_str());
         ServiceRequest* service_req = new ServiceRequest();
         service_req->conn_ = conn;
         service_req->state_= state;
@@ -234,14 +239,12 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
             LOG_ERROR("acquire proxy error: %s for %s\n", err_msg.c_str(), conn->peer_addr().c_str());
             return;
         }
-        request_ptr_t req = conn->get_request();
-        http_client_->PutRequest(req->uri, (void*)service_req, &req->headers, 
-            &req->content, single_task_cfg_, service_req->proxy_->acquire_addrinfo());
+        http_client_->PutRequest(conn_req->uri, (void*)service_req, &conn_req->headers, 
+            &conn_req->content, single_task_cfg_, service_req->proxy_->acquire_addrinfo());
         return;
     }
     
     //////// 通过http fetch_task接口 过来的请求  /////////
-    request_ptr_t conn_req = conn->get_request();
     if(conn_req->content.empty())
     {
         std::string error_cont = "fetch task has no content";
@@ -343,7 +346,7 @@ void SpiderService::update_outside_proxy(const char* proxy_str)
 
 void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
 {
-    // 从proxy service接口拿到的代理信息
+    // 从proxy service接口拿到的代理列表结果
     if(!result->contex_)
     {
         if(result->error_.error_num() != RS_OK)
@@ -354,6 +357,7 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
         result->resp_->Body.push_back('\0');
         result->resp_->Body.pop_back();
         update_outside_proxy(&result->resp_->Body[0]);
+        return;
     }
 
     ServiceRequest* service_req = (ServiceRequest*)result->contex_;
@@ -362,34 +366,45 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
     request_ptr_t  req  = conn->get_request();
     switch(service_req->state_)
     {
+        // proxy接口收到的抓取任务返回的结果
         case SINGLE_FETCH_REQUEST:
         {
             boost::shared_ptr<http::server4::reply> resp(new http::server4::reply());
-            resp->status  = http::server4::reply::ok;
-            resp->headers = result->resp_->Headers;
-            resp->content.assign(result->resp_->Body.begin(), result->resp_->Body.end());
-            resp->status = (http::server4::reply::status_type)result->resp_->StatusCode;
+            resp->status  = http::server4::reply::service_unavailable;
+            if(result->resp_)
+            {
+                resp->headers = result->resp_->Headers;
+                resp->content.assign(result->resp_->Body.begin(), result->resp_->Body.end());
+                resp->status = (http::server4::reply::status_type)result->resp_->StatusCode;
+            }
             conn->write_http_reply(resp);
             delete service_req;
             result->contex_ = NULL;
             break;
         }
+        // 批量抓取任务返回的结果
         case BATCH_FETCH_REQUEST:
         {
             SpiderFetchRequest& fetch_request = service_req->task_->req_array_[service_req->req_idx_];
             service_req->state_ = SEND_RESULT;
             ++service_req->send_result_retry_count_;
-            fetch_request.req_headers_ = result->resp_->Headers;
-            fetch_request.content_.swap(result->resp_->Body);
+            if(!result->resp_)
+            {
+                fetch_request.req_headers_ = result->resp_->Headers;
+                fetch_request.content_.swap(result->resp_->Body);
+            }
             http_client_->PutRequest(conn->get_request()->uri, (void*)service_req, &fetch_request.req_headers_, 
                  &fetch_request.content_, batch_task_cfg_, service_req->task_->ai_);
             break;
         }
+        // 发送任务返回的结果
         case SEND_RESULT:
         {
-            if(result->resp_->StatusCode != 200)
+            if(result->is_error())
             {
-                LOG_ERROR("send result to %s error.\n", task->get_response_address().c_str());
+                LOG_ERROR("send result to %s error: %s, %hu / %u.\n", 
+                    task->get_response_address().c_str(), result->error_msg().c_str(),
+                    service_req->send_result_retry_count_, config_->send_result_retry_times_);
                 ++service_req->send_result_retry_count_;
                 if(service_req->send_result_retry_count_ <= config_->send_result_retry_times_)
                 {
@@ -401,7 +416,7 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
                 LOG_ERROR("send result to %s failed.\n", task->get_response_address().c_str());
             }
             else
-                LOG_DEBUG("send result to %s error.\n", task->get_response_address().c_str());
+                LOG_DEBUG("send result to %s ok.\n", task->get_response_address().c_str());
             delete service_req;
             break;
         }
