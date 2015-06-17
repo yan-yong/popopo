@@ -232,6 +232,9 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
         service_req->conn_ = conn;
         service_req->state_= state;
         std::string err_msg;
+        std::vector<char> * pcont = &conn_req->content;
+        if(conn_req->method == "GET")
+            pcont = NULL;
         if(!acquire_proxy(service_req, err_msg))
         {
             delete service_req;
@@ -240,7 +243,7 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
             return;
         }
         http_client_->PutRequest(conn_req->uri, (void*)service_req, &conn_req->headers, 
-            &conn_req->content, single_task_cfg_, service_req->proxy_->acquire_addrinfo());
+            pcont, single_task_cfg_, service_req->proxy_->acquire_addrinfo());
         return;
     }
     

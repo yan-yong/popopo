@@ -39,6 +39,7 @@ int main(int argc, char* argv[])
         LOG_ERROR("sigaction SIGTERM error.\n");
         return -1;
     }
+
     g_spider->wait();
 
     return 0;

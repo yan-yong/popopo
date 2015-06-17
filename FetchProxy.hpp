@@ -230,8 +230,8 @@ class FetchProxyMap
             plst->add_front(*proxy);
         else
             plst->add_back(*proxy);
-        std::string proxy_flag = proxy->is_outside_ ? "outside" : "ping";
-        LOG_INFO("%s proxy %s move to candidate\n", proxy_flag.c_str(), proxy->ToString().c_str());
+        //std::string proxy_flag = proxy->is_outside_ ? "outside" : "ping";
+        //LOG_INFO("%s proxy %s move to candidate\n", proxy_flag.c_str(), proxy->ToString().c_str());
     }
 
     void __check_error_proxy_delete()
@@ -452,14 +452,14 @@ public:
         {
             FetchProxy* next_proxy = internal_lst_.next(*first_internal_proxy);
             if(first_internal_proxy->update_time_ != cur_time)
-                __move_to_error(next_proxy);
+                __move_to_error(first_internal_proxy);
             first_internal_proxy = next_proxy;
         }
         while(first_foreign_proxy)
         {
             FetchProxy* next_proxy = foreign_lst_.next(*first_foreign_proxy);
             if(first_foreign_proxy->update_time_ != cur_time)
-                __move_to_error(next_proxy);
+                __move_to_error(first_foreign_proxy);
             first_foreign_proxy = next_proxy;
         }
     }
