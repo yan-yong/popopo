@@ -5,10 +5,12 @@
 #include "jsoncpp/include/json/json.h"
 #include "async_httpserver/reply.hpp"
 
+uint64_t ServiceRequest::id_generator_ = 0;
+
 SpiderService::SpiderService():
     outside_request_time_(0), single_task_cfg_(NULL), 
-    batch_task_cfg_(NULL), stopped_(false), result_pid_(0), 
-    pool_pid_(0), outside_proxy_size_(0)
+    batch_task_cfg_(NULL), result_push_cfg_(NULL), stopped_(false), 
+    result_pid_(0), pool_pid_(0), outside_proxy_size_(0)
 {
 
 }
@@ -44,7 +46,7 @@ void SpiderService::initialize(boost::shared_ptr<Config> config)
     // http server
     http_server_.reset(new HttpServer());
     http_server_->initialize("0.0.0.0", config_->listen_port_, config_->conn_timeout_sec_);
-    http_server_->add_runtine(5, boost::bind(&SpiderService::timed_runtine, shared_from_this()));
+    http_server_->add_runtine(config_->outside_proxy_check_time_, boost::bind(&SpiderService::timed_runtine, shared_from_this()));
     http_server_->set_norm_http_handler(boost::bind(&SpiderService::handle_norm_request, this, _1));
     http_server_->set_tunnel_http_handler(boost::bind(&SpiderService::handle_tunnel_request, this, _1));
 
@@ -100,11 +102,9 @@ void SpiderService::handle_norm_request(conn_ptr_t conn)
     }
     //** fetch request
     if(path == config_->fetch_task_path_)
-    {
         recv_fetch_task(conn, BATCH_FETCH_REQUEST);
-        return;
-    }
-    recv_fetch_task(conn, SINGLE_FETCH_REQUEST);
+    else
+        recv_fetch_task(conn, SINGLE_FETCH_REQUEST);
 }
 
 void SpiderService::handle_tunnel_request(conn_ptr_t conn)
@@ -113,15 +113,12 @@ void SpiderService::handle_tunnel_request(conn_ptr_t conn)
     req->conn_ = conn;
     req->state_= SINGLE_FETCH_REQUEST;
     std::string err_msg;
-    if(!acquire_proxy(req, err_msg))
+    if(!do_fetch(req, err_msg))
     {
-        delete req;
-        conn->write_http_service_unavailable(err_msg);
-        LOG_ERROR("acquire proxy error: %s for tunnel %s\n", err_msg.c_str(), conn->peer_addr().c_str());
-        return;
+        LOG_ERROR("%s request %lu %s error: %s.\n", 
+            req->get_state().c_str(), req->id_, req->get_url().c_str(), err_msg.c_str());
     }
     delete req;
-    http_server_->tunnel_connect(req->conn_, req->proxy_->ip_, req->proxy_->port_, true);
 }
 
 // proxy调度
@@ -221,41 +218,102 @@ void SpiderService::release_proxy(ServiceRequest* service_req)
     service_req->proxy_ = NULL;
 }
 
+//** 接口: 执行抓取
+bool SpiderService::do_fetch(ServiceRequest* request, std::string & err_msg)
+{
+    BatchConfig* batch_cfg = NULL; 
+    switch(request->state_)
+    {
+        case SINGLE_FETCH_REQUEST:
+        {
+            batch_cfg = single_task_cfg_;
+            request->fetch_request_retry_count_ += 1;
+            break;
+        }
+        case TUNNEL_FETCH_REQUEST:
+        {
+            batch_cfg = tunnel_task_cfg_;
+            request->fetch_request_retry_count_ += 1;
+            break;
+        }
+        case BATCH_FETCH_REQUEST:
+        {
+            batch_cfg = batch_task_cfg_;
+            request->fetch_request_retry_count_ += 1;
+            break;
+        }
+        case SEND_RESULT:
+        {
+            batch_cfg = result_push_cfg_;
+            request->send_result_retry_count_ += 1;
+            break;
+        }
+    }
+    if(batch_cfg && request->arrive_time_ + single_task_cfg_->timeout_sec_ < time(NULL))
+    {
+        err_msg = "fetch timeout";
+        LOG_ERROR("%s request %lu %s error: %s.\n", 
+            request->get_state().c_str(), request->id_, request->get_url().c_str(), err_msg.c_str());
+        return false;
+    }
+    if(batch_cfg && (request->fetch_request_retry_count_ > batch_cfg->max_retry_times_ || 
+        request->send_result_retry_count_ > batch_cfg->max_retry_times_) )
+    {
+        err_msg = "exceed max retry times";
+        LOG_ERROR("%s request %lu %s error: %s.\n", 
+            request->get_state().c_str(), request->id_, request->get_url().c_str(), err_msg.c_str());
+        return false;
+    }
+    if(!acquire_proxy(request, err_msg))
+    {
+        LOG_ERROR("%s request %lu %s error: %s.\n", 
+            request->get_state().c_str(), request->id_, request->get_url().c_str(), err_msg.c_str());
+        return false;
+    }
+
+    LOG_INFO("put %s request %lu %s from %s\n", request->get_state().c_str(), request->id_,
+        request->get_url().c_str(), request->conn_->peer_addr().c_str());
+    // 隧道请求直接处理, 不使用httpclient
+    if(request->state_ == TUNNEL_FETCH_REQUEST)
+    {
+        http_server_->tunnel_connect(request->conn_, request->proxy_->ip_, request->proxy_->port_, true);
+        return true;
+    }
+    // 用httpclient请求
+    http_client_->PutRequest(request->get_url(), (void*)request, request->get_headers(), 
+        request->get_content(), batch_cfg, request->proxy_->acquire_addrinfo());
+    return true;
+}
+
+//** 接口: 处理所有接收到的抓取任务
 void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
 {
-    request_ptr_t conn_req = conn->get_request();
-    // 通过http代理接口 过来的请求
+    /////// 通过http代理接口 过来的请求
     if(state == SINGLE_FETCH_REQUEST)
     {
-        LOG_INFO("RECV SINGLE_FETCH_REQUEST %s from %s\n", conn_req->uri.c_str(), conn->peer_addr().c_str());
         ServiceRequest* service_req = new ServiceRequest();
-        service_req->conn_ = conn;
-        service_req->state_= state;
+        service_req->conn_  = conn;
+        service_req->state_ = state;
         std::string err_msg;
-        std::vector<char> * pcont = &conn_req->content;
-        if(conn_req->method == "GET")
-            pcont = NULL;
-        if(!acquire_proxy(service_req, err_msg))
+        if(!do_fetch(service_req, err_msg))
         {
+            conn->write_http_bad_request(err_msg);
             delete service_req;
-            conn->write_http_service_unavailable(err_msg);
-            LOG_ERROR("acquire proxy error: %s for %s\n", err_msg.c_str(), conn->peer_addr().c_str());
-            return;
         }
-        http_client_->PutRequest(conn_req->uri, (void*)service_req, &conn_req->headers, 
-            pcont, single_task_cfg_, service_req->proxy_->acquire_addrinfo());
         return;
     }
     
     //////// 通过http fetch_task接口 过来的请求  /////////
+    request_ptr_t conn_req = conn->get_request(); 
     if(conn_req->content.empty())
     {
-        std::string error_cont = "fetch task has no content";
-        conn->write_http_bad_request(error_cont);
+        std::string err_msg = "fetch task has no content";
+        conn->write_http_bad_request(err_msg);
         LOG_ERROR("skip invalid fetch task: %s, %s\n", 
-            error_cont.c_str(), conn->peer_addr().c_str());
+            err_msg.c_str(), conn->peer_addr().c_str());
         return;
     }
+
     // json解析
     conn_req->content.push_back('\0');
     const char*  task_str = &conn_req->content[0];
@@ -264,42 +322,37 @@ void SpiderService::recv_fetch_task(conn_ptr_t conn, ServiceState state)
     Json::Reader reader;
     if(!reader.parse(task_str, task_json))
     {
-        std::string error_cont = "fetch task content is invalid json";
+        std::string err_msg = "fetch task content is invalid json";
         LOG_ERROR("skip invalid fetch task: %s, %s\n", 
-            error_cont.c_str(), conn->peer_addr().c_str());
-        conn->write_http_bad_request(error_cont);
+            err_msg.c_str(), conn->peer_addr().c_str());
+        conn->write_http_bad_request(err_msg);
         return;
     }
     // fetch task反序列化
     task_ptr_t ptask(new SpiderFetchTask());
     if(!ptask->from_json(task_json) || ptask->req_array_.size() == 0)
     {
-        std::string error_cont = "fetch task deserializate error";
-        LOG_ERROR("skip invalid fetch task: %s, %s\n", 
-            error_cont.c_str(), conn->peer_addr().c_str());
-        conn->write_http_bad_request(error_cont);
+        std::string err_msg = "fetch task deserializate error";
+        LOG_ERROR("BATCH_FETCH_REQUEST request %s error: %s.\n", 
+            conn_req->uri.c_str(), err_msg.c_str());
+        conn->write_http_bad_request(err_msg);
         return;
     }
     std::string parser_type = ptask->parser_type_;
     // 提交抓取任务
     for(unsigned i = 0; i < ptask->req_array_.size(); ++i)
     {
-        SpiderFetchRequest& fetch_req = ptask->req_array_[i];
         ServiceRequest* service_req = new ServiceRequest();
         service_req->conn_ = conn;
         service_req->state_= state;
         service_req->task_ = ptask;
         service_req->req_idx_ = (int)i;
         std::string err_msg;
-        if(!acquire_proxy(service_req, err_msg))
+        if(!do_fetch(service_req, err_msg))
         {
+            conn->write_http_bad_request(err_msg);
             delete service_req;
-            conn->write_http_service_unavailable(err_msg);
-            LOG_ERROR("acquire proxy error: %s for %s\n", err_msg.c_str(), conn->peer_addr().c_str());
-            continue;
         }
-        http_client_->PutRequest(fetch_req.url_, (void*)service_req, &fetch_req.req_headers_, 
-            &fetch_req.content_, batch_task_cfg_, service_req->proxy_->acquire_addrinfo());
     }
     // response ok
     conn->write_http_ok();
@@ -347,6 +400,7 @@ void SpiderService::update_outside_proxy(const char* proxy_str)
         outside_proxy_map_.candidate_size(), outside_proxy_map_.error_size() );
 }
 
+//** 接口: 处理所有接收到的抓取结果
 void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
 {
     // 从proxy service接口拿到的代理列表结果
@@ -362,6 +416,8 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
         update_outside_proxy(&result->resp_->Body[0]);
         return;
     }
+
+    // 抓取错误，在未超时的情况下，应进行重试
 
     ServiceRequest* service_req = (ServiceRequest*)result->contex_;
     task_ptr_t task = service_req->task_;
