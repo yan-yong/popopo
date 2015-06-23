@@ -14,7 +14,7 @@
 
     <OutsideProxy>
         <Uri>http://103.240.16.119:9090/</Uri>
-        <CheckIntervalSec>2</CheckIntervalSec>
+        <CheckIntervalSec>60</CheckIntervalSec>
         <ProxyErrorRate>0.4</ProxyErrorRate>
         <ErrorCacheTimeout>36000</ErrorCacheTimeout>
     </OutsideProxy>

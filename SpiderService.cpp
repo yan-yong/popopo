@@ -35,9 +35,6 @@ void SpiderService::initialize(boost::shared_ptr<Config> config)
     for(unsigned i = 0; i < config_->ping_nodes_lst_.size(); ++i)
         ping_proxy_map_.add_proxy(false, config_->ping_nodes_lst_[i].first, config_->ping_nodes_lst_[i].second);
 
-    // dns resolver
-    dns_resolver_.reset(new DNSResolver());
-
     // http client
     http_client_.reset(new HttpClient(config_->max_request_size_, 
         config_->max_result_size_, config_->client_bind_eth_.c_str()));
@@ -111,11 +108,11 @@ void SpiderService::handle_tunnel_request(conn_ptr_t conn)
 {
     ServiceRequest* req = new ServiceRequest();
     req->conn_ = conn;
-    req->state_= SINGLE_FETCH_REQUEST;
+    req->state_= TUNNEL_FETCH_REQUEST;
     std::string err_msg;
     if(!do_fetch(req, err_msg))
     {
-        LOG_ERROR("%s request %lu %s error: %s.\n", 
+        LOG_ERROR("%s request_%lu %s error: %s.\n", 
             req->get_state().c_str(), req->id_, req->get_url().c_str(), err_msg.c_str());
     }
     delete req;
@@ -221,38 +218,43 @@ void SpiderService::release_proxy(ServiceRequest* service_req)
 //** 接口: 执行抓取
 bool SpiderService::do_fetch(ServiceRequest* request, std::string & err_msg)
 {
-    BatchConfig* batch_cfg = NULL; 
+    BatchConfig* batch_cfg = NULL;
+    uint16_t retry_count = 0; 
     switch(request->state_)
     {
         case SINGLE_FETCH_REQUEST:
         {
             batch_cfg = single_task_cfg_;
             request->fetch_request_retry_count_ += 1;
+            retry_count = request->fetch_request_retry_count_;
             break;
         }
         case TUNNEL_FETCH_REQUEST:
         {
             batch_cfg = tunnel_task_cfg_;
             request->fetch_request_retry_count_ += 1;
+            retry_count = request->fetch_request_retry_count_;
             break;
         }
         case BATCH_FETCH_REQUEST:
         {
             batch_cfg = batch_task_cfg_;
             request->fetch_request_retry_count_ += 1;
+            retry_count = request->fetch_request_retry_count_;
             break;
         }
         case SEND_RESULT:
         {
             batch_cfg = result_push_cfg_;
             request->send_result_retry_count_ += 1;
+            retry_count = request->send_result_retry_count_;
             break;
         }
     }
     if(batch_cfg && request->arrive_time_ + single_task_cfg_->timeout_sec_ < time(NULL))
     {
         err_msg = "fetch timeout";
-        LOG_ERROR("%s request %lu %s error: %s.\n", 
+        LOG_ERROR("%s request_%lu %s error: %s.\n", 
             request->get_state().c_str(), request->id_, request->get_url().c_str(), err_msg.c_str());
         return false;
     }
@@ -260,19 +262,19 @@ bool SpiderService::do_fetch(ServiceRequest* request, std::string & err_msg)
         request->send_result_retry_count_ > batch_cfg->max_retry_times_) )
     {
         err_msg = "exceed max retry times";
-        LOG_ERROR("%s request %lu %s error: %s.\n", 
+        LOG_ERROR("%s request_%lu %s error: %s.\n", 
             request->get_state().c_str(), request->id_, request->get_url().c_str(), err_msg.c_str());
         return false;
     }
     if(!acquire_proxy(request, err_msg))
     {
-        LOG_ERROR("%s request %lu %s error: %s.\n", 
+        LOG_ERROR("%s request_%lu %s error: %s.\n", 
             request->get_state().c_str(), request->id_, request->get_url().c_str(), err_msg.c_str());
         return false;
     }
 
-    LOG_INFO("put %s request %lu %s from %s\n", request->get_state().c_str(), request->id_,
-        request->get_url().c_str(), request->conn_->peer_addr().c_str());
+    LOG_INFO("put_fetch %s request_%lu %s from %s, retry %u\n", request->get_state().c_str(), request->id_,
+        request->get_url().c_str(), request->conn_->peer_addr().c_str(), retry_count);
     // 隧道请求直接处理, 不使用httpclient
     if(request->state_ == TUNNEL_FETCH_REQUEST)
     {
@@ -417,9 +419,15 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
         return;
     }
 
-    // 抓取错误，在未超时的情况下，应进行重试
-
     ServiceRequest* service_req = (ServiceRequest*)result->contex_;
+    // 抓取错误，在未超时的情况下，应进行重试
+    if(result->is_error()) 
+    {
+        std::string err_msg;
+        if(do_fetch(service_req, err_msg))
+            return;
+    }
+
     task_ptr_t task = service_req->task_;
     conn_ptr_t conn = service_req->conn_;
     request_ptr_t  req  = conn->get_request();

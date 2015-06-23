@@ -34,13 +34,12 @@ struct ServiceRequest
     uint16_t      send_result_retry_count_;
     uint16_t      fetch_request_retry_count_;
     int           req_idx_;
-    uint16_t      retry_count_;
     time_t        arrive_time_;
 
     ServiceRequest():
         state_(SINGLE_FETCH_REQUEST), proxy_(NULL), 
         send_result_retry_count_(0), fetch_request_retry_count_(0), 
-        req_idx_(-1), retry_count_(0), arrive_time_(time(NULL))
+        req_idx_(-1), arrive_time_(time(NULL))
     {
         id_ = __sync_fetch_and_add(&id_generator_, 1);
     }
@@ -94,7 +93,6 @@ class SpiderService: public boost::enable_shared_from_this<SpiderService>
     boost::shared_ptr<Config>      config_;
     boost::shared_ptr<HttpServer>  http_server_;
     boost::shared_ptr<HttpClient>  http_client_;
-    boost::shared_ptr<DNSResolver> dns_resolver_;
 
     FetchProxyMap outside_proxy_map_;
     FetchProxyMap ping_proxy_map_;
