@@ -444,6 +444,7 @@ void SpiderService::handle_fetch_result(HttpClient::ResultPtr result)
                 resp->content.assign(result->resp_->Body.begin(), result->resp_->Body.end());
                 resp->status = (http::server4::reply::status_type)result->resp_->StatusCode;
             }
+            // 使用socket直接返回
             conn->write_http_reply(resp);
             delete service_req;
             result->contex_ = NULL;
